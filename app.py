@@ -107,3 +107,41 @@ if token:
         st.error("No organizations found in your Action1 account.")
 else:
     st.error("Authentication failed. Check your Client ID and Secret.")
+
+# --- 4. DIAGNOSTIC MAIN APP LOGIC ---
+token = get_action1_token()
+
+if token:
+    orgs = get_action1_orgs(token)
+    
+    # 1. SIDEBAR SELECTION
+    if orgs:
+        org_names = [o['name'] for o in orgs]
+        selected_name = st.sidebar.selectbox("Select Organization:", org_names)
+        
+        # 2. MATCH THE ID
+        selected_id = next(o['id'] for o in orgs if o['name'] == selected_name)
+        
+        # 3. FETCH ENDPOINTS
+        raw_data = get_org_details(token, selected_id)
+
+        # --- DEBUGGING AREA ---
+        with st.expander("🛠️ Debug Information (Check this if device is missing)"):
+            st.write(f"Selected Org Name: {selected_name}")
+            st.write(f"Selected Org ID: {selected_id}")
+            st.write(f"API Token Active: {'Yes' if token else 'No'}")
+            
+            # Fetch EVERYTHING just to see where 'Shivnit' is hiding
+            all_endpoints_url = "https://app.au.action1.com/api/3.0/endpoints/managed"
+            all_res = requests.get(all_endpoints_url, headers={"Authorization": f"Bearer {token}"}).json()
+            st.write("All Endpoints found in API:")
+            st.json(all_res)
+
+        if raw_data:
+            df = pd.DataFrame(raw_data)
+            # ... (rest of your metrics code)
+            st.success(f"Found {len(df)} device(s)!")
+            st.dataframe(df)
+        else:
+            st.warning(f"The API is returning 0 devices for the Organization ID: {selected_id}")
+            st.info("Check if 'Shivnit' is assigned to a different Org ID in the Action1 console.")
