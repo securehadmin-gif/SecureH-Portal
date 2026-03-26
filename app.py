@@ -34,16 +34,19 @@ def get_action1_orgs(_token):
 
 def get_org_details(_token, org_id, org_name):
     headers = {"Authorization": f"Bearer {_token}"}
-    # To fix the 'missing device' issue, we fetch ALL and filter in Python
-    url = "https://app.au.action1.com/api/3.0/endpoints/managed"
-    res = requests.get(url, headers=headers)
+    # Using the Search API - it's more 'aggressive' at finding devices
+    url = "https://app.au.action1.com/api/3.0/endpoints" 
     
-    if res.status_code == 200:
-        all_devices = res.json().get("items", [])
-        # If 'All' is selected, return everything. Otherwise, filter by ID.
-        if org_name == "All Organizations":
-            return all_devices
-        return [d for d in all_devices if str(d.get('organization_id')) == str(org_id)]
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            all_devices = res.json().get("items", [])
+            
+            if org_name == "All Organizations":
+                return all_devices
+            return [d for d in all_devices if str(d.get('organization_id')) == str(org_id)]
+    except:
+        pass
     return []
 
 # --- 4. MAIN UI LOGIC ---
