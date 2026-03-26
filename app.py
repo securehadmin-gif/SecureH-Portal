@@ -37,13 +37,28 @@ def get_action1_orgs(_token):
     res = requests.get(url, headers=headers)
     return res.json().get("items", []) if res.status_code == 200 else []
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=60)
 def get_org_details(_token, org_id):
     headers = {"Authorization": f"Bearer {_token}"}
-    # Fetching managed endpoints for the specific organization
-    url = f"https://app.au.action1.com/api/3.0/endpoints/managed?organization_id={org_id}"
-    res = requests.get(url, headers=headers)
-    return res.json().get("items", []) if res.status_code == 200 else []
+    # Step 1: Fetch ALL managed endpoints available to your API key
+    url = "https://app.au.action1.com/api/3.0/endpoints/managed"
+    
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            all_items = res.json().get("items", [])
+            # Step 2: Manually filter for the selected Org ID to be 100% sure
+            # Action1 IDs can sometimes be strings or integers, we cast to string to match
+            filtered_data = [i for i in all_items if str(i.get('organization_id')) == str(org_id)]
+            
+            # DEBUG: If still empty, let's see what's actually coming back
+            if not filtered_data and all_items:
+                st.sidebar.write(f"Found {len(all_items)} total devices, but none matched Org ID: {org_id}")
+            
+            return filtered_data
+    except Exception as e:
+        st.error(f"Data Fetch Error: {e}")
+    return []
 
 # --- 4. MAIN APP LOGIC ---
 token = get_action1_token()
