@@ -2,109 +2,81 @@ import streamlit as st
 import requests
 import pandas as pd
 from groq import Groq
-import plotly.express as px # For fancy charts
+import plotly.express as px
 
-# --- SETUP ---
+# --- 1. SETUP ---
 st.set_page_config(page_title="SecureH AI Assessor", layout="wide")
-st.title("🚀 SecureH Automated IT Assessment")
+st.title("🛡️ SecureH Automated IT Assessment")
 
-# Secrets
-CLIENT_ID = st.secrets["ACTION1_CLIENT_ID"]
-CLIENT_SECRET = st.secrets["ACTION1_CLIENT_SECRET"]
-client = Groq(api_key=st.secrets["GROQ_TOKEN"])
+# Ensure these match your Streamlit Cloud Secrets
+CLIENT_ID = st.secrets.get("ACTION1_CLIENT_ID")
+CLIENT_SECRET = st.secrets.get("ACTION1_CLIENT_SECRET")
+GROQ_KEY = st.secrets.get("GROQ_TOKEN")
 
-# --- AUTOMATION ENGINE ---
-def get_token():
+# --- 2. AUTHENTICATION ---
+def get_action1_token():
     url = "https://app.au.action1.com/api/3.0/oauth2/token"
-    res = requests.post(url, data={"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}, 
-                        headers={"Content-Type": "application/x-www-form-urlencoded"})
-    return res.json().get("access_token")
-
-@st.cache_data(ttl=600)
-def fetch_all_assessment_data(_token):
-    # Using the standard 'endpoints' list for the AU region
-    url = "https://app.au.action1.com/api/3.0/endpoints"
-    headers = {"Authorization": f"Bearer {_token}"}
-    
+    payload = {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
-        res = requests.get(url, headers=headers)
-        
-        # Check if the API actually returned a success code (200)
+        res = requests.post(url, data=payload, headers=headers)
         if res.status_code == 200:
-            return res.json().get("items", [])
-        else:
-            st.error(f"Action1 API Error {res.status_code}: {res.text}")
-            return []
+            return res.json().get("access_token")
+        st.error(f"Auth Failed ({res.status_code}): Check your credentials.")
     except Exception as e:
-        st.error(f"Connection failed: {e}")
+        st.error(f"Connection Error: {e}")
+    return None
+
+# --- 3. DATA FETCHING ---
+@st.cache_data(ttl=600)
+def fetch_endpoints(_token, org_id=None):
+    # Action1 AU Region Endpoint
+    # If no org_id is provided, we try the general search
+    url = "https://app.au.action1.com/api/3.0/endpoints"
+    if org_id:
+        url = f"https://app.au.action1.com/api/3.0/endpoints/managed/{org_id}"
+    
+    headers = {"Authorization": f"Bearer {_token}"}
+    res = requests.get(url, headers=headers)
+    
+    if res.status_code == 200:
+        return res.json().get("items", [])
+    else:
+        # This is where we catch the 403 error and explain it
+        st.warning(f"⚠️ Action1 returned {res.status_code}. You may need to enable 'API Access' in your Action1 console settings.")
         return []
 
-# --- RUN LOGIC ---
-token = get_token()
+# --- 4. MAIN LOGIC ---
+token = get_action1_token()
+
 if token:
-    data = fetch_all_assessment_data(token)
+    # We'll start by searching for ALL endpoints (useful for the 'Shivnit' search)
+    raw_data = fetch_endpoints(token)
     
-    if data:
-        df = pd.DataFrame(data)
+    if raw_data:
+        df = pd.DataFrame(raw_data)
         
-        # 1. TOP LEVEL METRICS
-        total_pcs = len(df)
-        # Ensure column names match Action1 API (usually 'missing_critical_updates')
-        crit_col = 'missing_critical_updates' if 'missing_critical_updates' in df else 'missing_updates'
-        total_crit = df[crit_col].sum()
+        # UI METRICS
+        st.subheader("📊 Fleet Health Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Devices", len(df))
         
-        st.subheader("📊 Network Health Overview")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Managed Assets", total_pcs)
-        m2.metric("Critical Security Gaps", total_crit, delta="Immediate Risk", delta_color="inverse")
+        # Safely count critical updates
+        crit_col = 'missing_critical_updates' if 'missing_critical_updates' in df else None
+        total_crit = df[crit_col].sum() if crit_col else 0
+        col2.metric("Critical Security Gaps", total_crit, delta="Risk High", delta_color="inverse")
         
-        # Calculate a Fancy 'SecureH Grade'
-        grade = "A" if total_crit == 0 else "B" if total_crit < 5 else "D"
-        m3.metric("Security Grade", grade)
-
-        # 2. FANCY VISUALS
-        col_left, col_right = st.columns(2)
-        with col_left:
-            st.write("### OS Distribution")
-            fig = px.pie(df, names='os_name', hole=0.4, color_discrete_sequence=px.colors.sequential.RdBu)
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with col_right:
-            st.write("### Vulnerability Heatmap")
-            # Creating a fake 'Risk' column based on patches for the chart
-            df['Risk_Level'] = df[crit_col].apply(lambda x: 'High' if x > 5 else 'Medium' if x > 0 else 'Low')
-            fig2 = px.bar(df, x='endpoint_name', y=crit_col, color='Risk_Level')
-            st.plotly_chart(fig2, use_container_width=True)
-
-        # 3. AI EXECUTIVE SUMMARY (The 'Closer')
+        # AI REPORT GENERATOR
         st.divider()
-        st.subheader("🤖 AI Consultant Audit")
-        if st.button("Generate Professional Assessment"):
-            summary_stats = df[['endpoint_name', 'os_name', crit_col]].to_string()
-            prompt = f"""You are a Cybersecurity Expert at SecureH. Write a professional 3-paragraph IT assessment for a business owner based on this data: {summary_stats}. 
-            Identify the biggest risk and explain why they need SecureH Managed Services immediately."""
-            
-            with st.spinner("Analyzing vulnerabilities..."):
-                response = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama3-8b-8192")
-                st.markdown(f"### Assessment Report\n{response.choices[0].message.content}")
+        if st.button("Generate AI Assessment"):
+            client = Groq(api_api_key=GROQ_KEY)
+            prompt = f"Analyze this IT data: {df[['endpoint_name', 'os_name']].to_string()}. Write a 3-sentence risk report for SecureH clients."
+            with st.spinner("Analyzing..."):
+                chat = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama3-8b-8192")
+                st.info(chat.choices[0].message.content)
 
+        # DATA TABLE
+        st.subheader("Inventory View")
+        st.dataframe(df)
     else:
-        st.error("No data returned. Check API Key Scopes (Permissions) in Action1.")
-# --- AUTOMATED RISK SCORING ---
-def calculate_risk_score(df):
-    # Logic: Start at 100, subtract points for risks
-    score = 100
-    
-    # -10 points for every Critical Vulnerability
-    crit_count = df['missing_critical_updates'].sum() if 'missing_critical_updates' in df else 0
-    score -= (crit_count * 10)
-    
-    # -20 points if any device is on Windows 10 (since it's EOL soon)
-    if any(df['os_name'].str.contains("Windows 10", na=False)):
-        score -= 20
-        
-    return max(0, score) # Score can't be below 0
-
-# --- DISPLAY IN APP ---
-current_score = calculate_risk_score(df)
-st.gauge(current_score, min_value=0, max_value=100, label="SecureH Trust Score")
+        st.info("No devices found. Ensure your Action1 agent is running and the API key has 'Read' permissions.")
