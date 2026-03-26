@@ -79,3 +79,21 @@ if token:
 
     else:
         st.error("No data returned. Check API Key Scopes (Permissions) in Action1.")
+# --- AUTOMATED RISK SCORING ---
+def calculate_risk_score(df):
+    # Logic: Start at 100, subtract points for risks
+    score = 100
+    
+    # -10 points for every Critical Vulnerability
+    crit_count = df['missing_critical_updates'].sum() if 'missing_critical_updates' in df else 0
+    score -= (crit_count * 10)
+    
+    # -20 points if any device is on Windows 10 (since it's EOL soon)
+    if any(df['os_name'].str.contains("Windows 10", na=False)):
+        score -= 20
+        
+    return max(0, score) # Score can't be below 0
+
+# --- DISPLAY IN APP ---
+current_score = calculate_risk_score(df)
+st.gauge(current_score, min_value=0, max_value=100, label="SecureH Trust Score")
