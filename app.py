@@ -22,11 +22,22 @@ def get_token():
 
 @st.cache_data(ttl=600)
 def fetch_all_assessment_data(_token):
-    # Using the broader 'endpoints' URL to ensure we catch 'Shivnit'
+    # Using the standard 'endpoints' list for the AU region
     url = "https://app.au.action1.com/api/3.0/endpoints"
     headers = {"Authorization": f"Bearer {_token}"}
-    res = requests.get(url, headers=headers)
-    return res.json().get("items", [])
+    
+    try:
+        res = requests.get(url, headers=headers)
+        
+        # Check if the API actually returned a success code (200)
+        if res.status_code == 200:
+            return res.json().get("items", [])
+        else:
+            st.error(f"Action1 API Error {res.status_code}: {res.text}")
+            return []
+    except Exception as e:
+        st.error(f"Connection failed: {e}")
+        return []
 
 # --- RUN LOGIC ---
 token = get_token()
