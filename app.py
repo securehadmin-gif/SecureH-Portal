@@ -1,73 +1,75 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import requests
 from groq import Groq
 
-# --- 1. THE LOOK & FEEL ---
+# --- 1. SETTINGS & AUTH ---
 st.set_page_config(page_title="SecureH Executive Portal", layout="wide")
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    </style>
-    """, unsafe_allow_html=True)
 
-st.title("🛡️ SecureH Managed IT Assessment")
-st.caption("Automated Security Audit & Risk Analysis")
+def get_token():
+    try:
+        url = "https://app.au.action1.com/api/3.0/oauth2/token"
+        res = requests.post(url, data={
+            "client_id": st.secrets["ACTION1_CLIENT_ID"],
+            "client_secret": st.secrets["ACTION1_CLIENT_SECRET"]
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        return res.json().get("access_token")
+    except:
+        return None
 
-# --- 2. THE DATA ENGINE ---
-# (Using a function to create 'Fancy' data if the API is restricted)
-def get_fancy_data():
-    # This simulates a real multi-device environment for a high-end presentation
-    data = [
-        {"Device": "SH-CEO-LAPTOP", "OS": "Windows 11", "Critical": 0, "Warning": 2, "Status": "Secure"},
-        {"Device": "SH-RECEPTION-01", "OS": "Windows 10", "Critical": 5, "Warning": 8, "Status": "At Risk"},
-        {"Device": "SH-SERVER-PROD", "OS": "Win Server 2022", "Critical": 12, "Warning": 15, "Status": "CRITICAL"},
-        {"Device": "SH-DEV-WKSTN", "OS": "Windows 11", "Critical": 1, "Warning": 4, "Status": "Needs Patching"},
-        {"Device": "Shivnit-PC", "OS": "Windows 10", "Critical": 3, "Warning": 5, "Status": "At Risk"},
+# --- 2. DATA FETCHING (REAL VS MOCK) ---
+def get_data(token):
+    if token:
+        headers = {"Authorization": f"Bearer {token}"}
+        # Try to get real endpoints
+        res = requests.get("https://app.au.action1.com/api/3.0/endpoints", headers=headers)
+        if res.status_code == 200:
+            items = res.json().get("items", [])
+            if items:
+                df = pd.DataFrame(items)
+                # Rename columns to match our fancy dashboard needs
+                df = df.rename(columns={'endpoint_name': 'Device', 'os_name': 'OS', 'missing_critical_updates': 'Critical'})
+                df['Warning'] = 2 # Placeholder for non-critical
+                df['Source'] = "LIVE DATA"
+                return df
+    
+    # MOCK DATA if API fails or is empty
+    st.sidebar.warning("⚠️ Using Assessment Simulation Mode (API Restricted)")
+    mock_data = [
+        {"Device": "SH-RECEPTION-01", "OS": "Windows 10", "Critical": 5, "Warning": 8, "Source": "SIMULATED"},
+        {"Device": "SH-SERVER-PROD", "OS": "Win Server 2022", "Critical": 12, "Warning": 15, "Source": "SIMULATED"},
+        {"Device": "Shivnit-PC (Demo)", "OS": "Windows 11", "Critical": 1, "Warning": 4, "Source": "SIMULATED"},
     ]
-    return pd.DataFrame(data)
+    return pd.DataFrame(mock_data)
 
-df = get_fancy_data()
+# --- 3. BUILD THE DASHBOARD ---
+st.title("🛡️ SecureH Managed IT Assessment")
+token = get_token()
+df = get_data(token)
 
-# --- 3. THE DASHBOARD ---
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Fleet Health", "62%", delta="-5% Risk Increase", delta_color="inverse")
-with col2:
-    st.metric("Critical Gaps", df['Critical'].sum(), delta="High Priority")
-with col3:
-    st.metric("Legacy OS", "40%", help="Devices running Windows 10 or older")
-with col4:
-    st.metric("SecureH Grade", "D+", delta="Immediate Action Required", delta_color="inverse")
+# METRICS
+c1, c2, c3 = st.columns(3)
+total_crit = df['Critical'].sum()
+c1.metric("Fleet Risk Level", "HIGH" if total_crit > 10 else "MODERATE")
+c2.metric("Critical Gaps", total_crit)
+c3.metric("Assessment Status", df['Source'].iloc[0])
 
+# CHARTS
+st.subheader("🚀 Vulnerability Distribution")
+fig = px.bar(df, x="Device", y="Critical", color="Critical", 
+             color_continuous_scale="Reds", title="Missing Security Patches per Device")
+st.plotly_chart(fig, use_container_width=True)
+
+# AI REPORT
 st.divider()
+if st.button("Generate AI Executive Analysis"):
+    client = Groq(api_key=st.secrets["GROQ_TOKEN"])
+    prompt = f"Analyze these IT risks for a business owner. Data: {df.to_string()}. Be professional and urgent."
+    with st.spinner("AI is auditing network..."):
+        completion = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama3-8b-8192")
+        st.success(completion.choices[0].message.content)
 
-# --- 4. VISUAL INTELLIGENCE (The 'Fancy' Part) ---
-c1, c2 = st.columns([2, 1])
-
-with c1:
-    st.subheader("🚀 Vulnerability Distribution")
-    # A high-end Bar Chart showing risks per device
-    fig = px.bar(df, x="Device", y=["Critical", "Warning"], 
-                 title="Unresolved Security Patches",
-                 color_discrete_map={"Critical": "#FF4B4B", "Warning": "#FFAA00"},
-                 barmode="group", template="plotly_white")
-    st.plotly_chart(fig, use_container_width=True)
-
-with c2:
-    st.subheader("📋 Executive Summary")
-    # AI Logic to explain the 'Fancy' charts
-    if st.button("Generate AI Audit"):
-        client = Groq(api_key=st.secrets["GROQ_TOKEN"])
-        risk_context = df.to_string()
-        prompt = f"Write a scary but professional 2-sentence summary of these risks for a CEO: {risk_context}"
-        
-        with st.spinner("AI Analysis in progress..."):
-            chat = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama3-8b-8192")
-            st.info(chat.choices[0].message.content)
-            st.warning("Recommendation: Deploy SecureH Agent to all 5 endpoints tonight.")
-
-# --- 5. THE DATA TABLE ---
+# DATA TABLE (Removed the styling to prevent the Matplotlib error)
 st.subheader("🔍 Deep-Dive Inventory")
-st.dataframe(df.style.background_gradient(cmap='Reds', subset=['Critical']))
+st.dataframe(df, use_container_width=True)
