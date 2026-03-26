@@ -1,47 +1,49 @@
 import streamlit as st
 import requests
 import pandas as pd
-from groq import Groq
 
-# --- CONFIG ---
-st.set_page_config(page_title="SecureH IT Assessment", layout="wide")
-st.title("🛡️ SecureH Free IT Assessment Portal")
-
-# --- SECURE KEYS ---
-# Ensure these are in your Streamlit Cloud Secrets!
-ACTION1_KEY = st.secrets["ACTION1_TOKEN"]
-GROQ_KEY = st.secrets["GROQ_TOKEN"]
-client = Groq(api_key=GROQ_KEY)
-
-# --- API FUNCTIONS ---
-@st.cache_data(ttl=300)
-def get_action1_orgs():
-    headers = {"Authorization": f"Bearer {ACTION1_KEY}"}
-    # Note: Replace with your actual Action1 region URL if different
-    url = "https://app.action1.com/api/3.0/organizations"
+# 1. AUTHENTICATION: Exchange credentials for a Bearer Token
+def get_action1_token():
+    url = "https://app.au.action1.com/api/3.0/oauth2/token"
+    # Action1 expects form-encoded data for the token exchange
+    payload = {
+        "client_id": st.secrets["ACTION1_CLIENT_ID"],
+        "client_secret": st.secrets["ACTION1_CLIENT_SECRET"]
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    
     try:
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.post(url, data=payload, headers=headers)
         if response.status_code == 200:
-            return response.json().get("items", [])
+            return response.json().get("access_token")
+        else:
+            st.error(f"Login Failed: {response.status_code} - {response.text}")
+            return None
     except Exception as e:
-        st.error(f"Connection Error: {e}")
+        st.error(f"Auth Error: {e}")
+        return None
+
+# 2. FETCH ORGS: Using the token
+@st.cache_data(ttl=300)
+def get_action1_orgs(token):
+    if not token: return []
+    headers = {"Authorization": f"Bearer {token}"}
+    url = "https://app.au.action1.com/api/3.0/organizations"
+    
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json().get("items", [])
     return []
 
-def get_org_details(org_id):
-    headers = {"Authorization": f"Bearer {ACTION1_KEY}"}
-    url = f"https://app.action1.com/api/3.0/endpoints/managed?organization_id={org_id}"
-    try:
-        res = requests.get(url, headers=headers)
-        return res.json().get("items", [])
-    except:
-        return []
-
-# --- SIDEBAR & LOGIC ---
-orgs = get_action1_orgs()
+# --- APPLICATION LOGIC ---
+token = get_action1_token()
+orgs = get_action1_orgs(token)
 
 if not orgs:
-    st.warning("⚠️ No organizations found. Check your Action1 API Key and permissions.")
-    st.stop() # Stops the app here so it doesn't crash below
+    st.warning("⚠️ No organizations found. Verify your Secrets in Streamlit Cloud.")
+    st.stop()
+
+# ... rest of your code using 'token' for other API calls ...
 
 org_names = [o['name'] for o in orgs]
 selected_org_name = st.sidebar.selectbox("Select Client to Assess:", org_names)
