@@ -7,29 +7,24 @@ from groq import Groq
 st.set_page_config(page_title="SecureH IT Assessment", layout="wide")
 st.title("🛡️ SecureH Free IT Assessment Portal")
 
-# Use these exact names in your Streamlit Secrets
+# Ensure these match your Streamlit Cloud Secrets exactly
 CLIENT_ID = st.secrets["ACTION1_CLIENT_ID"]
 CLIENT_SECRET = st.secrets["ACTION1_CLIENT_SECRET"]
 GROQ_KEY = st.secrets["GROQ_TOKEN"]
 client = Groq(api_key=GROQ_KEY)
 
-# --- 2. THE AUTHENTICATION ENGINE ---
+# --- 2. AUTHENTICATION ---
 def get_action1_token():
-    """Exchanges Client ID/Secret for a temporary Bearer Token"""
     url = "https://app.au.action1.com/api/3.0/oauth2/token"
-    payload = {
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET
-    }
+    payload = {"client_id": CLIENT_ID, "client_secret": CLIENT_SECRET}
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     try:
         res = requests.post(url, data=payload, headers=headers)
         return res.json().get("access_token")
-    except Exception as e:
-        st.error(f"Auth Error: {e}")
+    except:
         return None
 
-# --- 3. DATA FETCHING FUNCTIONS ---
+# --- 3. DATA FETCHING ---
 @st.cache_data(ttl=300)
 def get_action1_orgs(_token):
     headers = {"Authorization": f"Bearer {_token}"}
@@ -37,111 +32,67 @@ def get_action1_orgs(_token):
     res = requests.get(url, headers=headers)
     return res.json().get("items", []) if res.status_code == 200 else []
 
-@st.cache_data(ttl=60)
-def get_org_details(_token, org_id):
+def get_org_details(_token, org_id, org_name):
     headers = {"Authorization": f"Bearer {_token}"}
-    # Step 1: Fetch ALL managed endpoints available to your API key
+    # To fix the 'missing device' issue, we fetch ALL and filter in Python
     url = "https://app.au.action1.com/api/3.0/endpoints/managed"
+    res = requests.get(url, headers=headers)
     
-    try:
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            all_items = res.json().get("items", [])
-            # Step 2: Manually filter for the selected Org ID to be 100% sure
-            # Action1 IDs can sometimes be strings or integers, we cast to string to match
-            filtered_data = [i for i in all_items if str(i.get('organization_id')) == str(org_id)]
-            
-            # DEBUG: If still empty, let's see what's actually coming back
-            if not filtered_data and all_items:
-                st.sidebar.write(f"Found {len(all_items)} total devices, but none matched Org ID: {org_id}")
-            
-            return filtered_data
-    except Exception as e:
-        st.error(f"Data Fetch Error: {e}")
+    if res.status_code == 200:
+        all_devices = res.json().get("items", [])
+        # If 'All' is selected, return everything. Otherwise, filter by ID.
+        if org_name == "All Organizations":
+            return all_devices
+        return [d for d in all_devices if str(d.get('organization_id')) == str(org_id)]
     return []
 
-# --- 4. MAIN APP LOGIC ---
+# --- 4. MAIN UI LOGIC ---
 token = get_action1_token()
 
 if token:
     orgs = get_action1_orgs(token)
     
     if orgs:
-        org_names = [o['name'] for o in orgs]
-        selected_name = st.sidebar.selectbox("Select Organization:", org_names)
-        selected_id = next(o['id'] for o in orgs if o['name'] == selected_name)
+        # Create list for sidebar
+        options = ["All Organizations"] + [o['name'] for o in orgs]
+        selected_name = st.sidebar.selectbox("Select Organization:", options, key="org_selector")
+        
+        # Get ID (None if 'All Organizations' is picked)
+        selected_id = next((o['id'] for o in orgs if o['name'] == selected_name), None)
 
-        # Get the real data using the token and the ID
-        raw_data = get_org_details(token, selected_id)
+        # Fetch devices
+        raw_data = get_org_details(token, selected_id, selected_name)
 
         if raw_data:
             df = pd.DataFrame(raw_data)
             
-            # --- CALCULATE METRICS ---
+            # --- METRICS ---
             total = len(df)
+            # Action1 field names might vary; checking common ones:
             crit = df['missing_critical_updates'].sum() if 'missing_critical_updates' in df else 0
-            # A simple Risk Score formula: 100 minus (Critical updates * 5), minimum 0.
-            risk_score = max(0, 100 - (crit * 5)) 
-
-            # --- DISPLAY DASHBOARD ---
+            
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Devices", total)
-            col2.metric("Critical Risks", crit, delta="Fix Needed", delta_color="inverse")
-            col3.metric("Health Score", f"{risk_score}/100")
+            col2.metric("Critical Risks", crit, delta="Action Required", delta_color="inverse")
+            col3.metric("Status", "Monitoring Active" if total > 0 else "Idle")
 
-            # --- AI ASSESSMENT ---
+            # --- AI REPORT ---
             st.divider()
-            if st.button("Generate AI Assessment Report"):
-                prompt = f"Client {selected_name} has {total} devices with {crit} critical vulnerabilities. Write a short urgent report for the CEO recommending SecureH's patching service."
-                completion = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama3-8b-8192"
-                )
-                st.info(completion.choices[0].message.content)
+            if st.button("Generate AI Executive Assessment"):
+                with st.spinner("AI is analyzing device health..."):
+                    prompt = f"Analyze: Organization '{selected_name}' has {total} devices with {crit} critical vulnerabilities. Write a 3-sentence risk summary for a CEO."
+                    chat = client.chat.completions.create(messages=[{"role":"user","content":prompt}], model="llama3-8b-8192")
+                    st.info(chat.choices[0].message.content)
+
+            # --- DATA TABLE ---
+            st.subheader("Inventory View")
+            # Show name 'Shivnit' if it exists
+            display_cols = ['endpoint_name', 'os_name', 'ip_address']
+            st.dataframe(df[[c for c in display_cols if c in df]])
             
-            st.subheader("Device Inventory Details")
-            st.dataframe(df[['endpoint_name', 'os_name', 'ip_address']])
         else:
-            st.info("No devices found for this organization.")
+            st.warning(f"No devices found for {selected_name}. Ensure the Action1 agent is active on 'Shivnit'.")
     else:
-        st.error("No organizations found in your Action1 account.")
+        st.error("No organizations found in this Action1 account.")
 else:
-    st.error("Authentication failed. Check your Client ID and Secret.")
-
-# --- 4. DIAGNOSTIC MAIN APP LOGIC ---
-token = get_action1_token()
-
-if token:
-    orgs = get_action1_orgs(token)
-    
-    # 1. SIDEBAR SELECTION
-    if orgs:
-        org_names = [o['name'] for o in orgs]
-        selected_name = st.sidebar.selectbox("Select Organization:", org_names)
-        
-        # 2. MATCH THE ID
-        selected_id = next(o['id'] for o in orgs if o['name'] == selected_name)
-        
-        # 3. FETCH ENDPOINTS
-        raw_data = get_org_details(token, selected_id)
-
-        # --- DEBUGGING AREA ---
-        with st.expander("🛠️ Debug Information (Check this if device is missing)"):
-            st.write(f"Selected Org Name: {selected_name}")
-            st.write(f"Selected Org ID: {selected_id}")
-            st.write(f"API Token Active: {'Yes' if token else 'No'}")
-            
-            # Fetch EVERYTHING just to see where 'Shivnit' is hiding
-            all_endpoints_url = "https://app.au.action1.com/api/3.0/endpoints/managed"
-            all_res = requests.get(all_endpoints_url, headers={"Authorization": f"Bearer {token}"}).json()
-            st.write("All Endpoints found in API:")
-            st.json(all_res)
-
-        if raw_data:
-            df = pd.DataFrame(raw_data)
-            # ... (rest of your metrics code)
-            st.success(f"Found {len(df)} device(s)!")
-            st.dataframe(df)
-        else:
-            st.warning(f"The API is returning 0 devices for the Organization ID: {selected_id}")
-            st.info("Check if 'Shivnit' is assigned to a different Org ID in the Action1 console.")
+    st.error("Authentication failed. Check your Action1 Secrets.")
