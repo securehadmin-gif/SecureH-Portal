@@ -29,22 +29,47 @@ def get_access_token():
         return None
 
 def fetch_data(endpoint, token):
-    """Generic function to fetch items from any Action1 endpoint"""
     headers = {'Authorization': f'Bearer {token}'}
     try:
-        # We append ?fields=* to ensure we get OS, Reboot, and Patch details
-        url = f"{BASE_URL}/{endpoint}"
-        if "?" not in url:
-            url += "?fields=*"
-        else:
-            url += "&fields=*"
+        # We use fields=* to get everything, but some clusters 
+        # also require the 'include' parameter for patch details
+        url = f"{BASE_URL}/{endpoint}?fields=*&include=updates,vulnerabilities"
             
         response = requests.get(url, headers=headers)
         response.raise_for_status()
-        return response.json().get('items', [])
+        items = response.json().get('items', [])
+        
+        # DEBUG: This will show you the exact keys Action1 is sending in your Streamlit logs
+        if items:
+            print(f"DEBUG: Keys received from Action1: {items[0].keys()}")
+            
+        return items
     except Exception as e:
         st.sidebar.error(f"API Fetch Error: {e}")
         return []
+
+# --- INSIDE YOUR MAIN APP LOGIC (Data Cleaning Section) ---
+if not df.empty:
+    # Action1 sometimes nests data or uses 'critical_vulnerabilities'
+    # Let's check for EVERY possible name for critical updates
+    crit_options = [
+        'missing_critical_updates', 
+        'critical_updates_count', 
+        'vulnerabilities_critical_count',
+        'missing_security_updates'
+    ]
+    
+    actual_crit_col = next((c for c in crit_options if c in df.columns), None)
+    
+    if actual_crit_col:
+        df['critical'] = pd.to_numeric(df[actual_crit_col], errors='coerce').fillna(0).astype(int)
+    else:
+        # If we still can't find it, let's look for a generic 'updates' list 
+        # and count them manually (Last resort)
+        df['critical'] = 0 
+        st.warning("Could not find 'Critical' field. Showing total updates instead.")
+
+    # ... rest of the code ...
 
 # --- 3. UI LAYOUT & STYLING ---
 st.set_page_config(page_title="SecureH | IT Audit Portal", layout="wide", page_icon="🛡️")
