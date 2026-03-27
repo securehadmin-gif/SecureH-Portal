@@ -44,12 +44,14 @@ st.set_page_config(page_title="SecureH | IT Audit Portal", layout="wide", page_i
 st.markdown("""
     <style>
     .main { background-color: #f5f7f9; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .stMetric { 
+        background-color: #ffffff; 
+        padding: 15px; 
+        border-radius: 10px; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+    }
     </style>
-    """, unsafe_allow_headers=True)
-
-st.title("🛡️ SecureH Automated IT Audit")
-st.caption("Real-time security insights powered by Action1 API")
+    """, unsafe_allow_html=True) # Changed from unsafe_allow_headers to unsafe_allow_html
 
 # --- 4. MAIN EXECUTION ---
 token = get_access_token()
