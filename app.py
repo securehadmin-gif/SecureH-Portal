@@ -57,38 +57,47 @@ st.markdown("""
 token = get_access_token()
 
 if token:
-    # Sidebar - Organization Selection
     with st.sidebar:
         st.header("Settings")
         orgs = fetch_action1_data("organizations", token)
         
         if orgs:
             org_map = {o['name']: o['id'] for o in orgs}
-            selected_org_name = st.selectbox("Select Client / Organization", list(org_map.keys()))
+            selected_org_name = st.selectbox("Select Client", list(org_map.keys()))
             selected_org_id = org_map[selected_org_name]
         else:
             st.error("No organizations found.")
             st.stop()
 
-    # Fetch Endpoints for selected Org
-    # Using fields=* to get patching and vulnerability data
+    # Fetch Endpoints
     endpoints_raw = fetch_action1_data(f"endpoints/managed/{selected_org_id}?fields=*", token)
     df = pd.DataFrame(endpoints_raw)
 
     if not df.empty:
+        # --- DATA CLEANING (The Fix for TypeErrors) ---
+        # 1. Force numeric columns to be numbers, replace 'None' with 0
+        numeric_cols = ['missing_updates', 'missing_critical_updates', 'vulnerabilities_count']
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            else:
+                df[col] = 0 # Create it if it doesn't exist to prevent crashes
+
+        # 2. Find the OS column dynamically
+        os_col = next((c for c in ['os_name', 'os_family', 'operating_system', 'os_version'] if c in df.columns), None)
+        
+        # 3. Ensure 'name' exists for the bar chart
+        if 'name' not in df.columns:
+            df['name'] = "Unknown Device"
+
         # --- HEADER METRICS ---
         st.header(f"Executive Summary: {selected_org_name}")
         m1, m2, m3, m4 = st.columns(4)
         
-        total_endpoints = len(df)
-        # Check if 'missing_critical_updates' exists, else default to 0
-        crit_patches = df['missing_critical_updates'].sum() if 'missing_critical_updates' in df.columns else 0
-        vulnerabilities = df['vulnerabilities_count'].sum() if 'vulnerabilities_count' in df.columns else "N/A"
-        
-        m1.metric("Total Assets", total_endpoints)
-        m2.metric("Critical Patches", crit_patches, delta="Action Required", delta_color="inverse")
-        m3.metric("Security Risks", vulnerabilities)
-        m4.metric("Global Compliance", "84%") # Example static metric
+        m1.metric("Total Assets", len(df))
+        m2.metric("Critical Patches", int(df['missing_critical_updates'].sum()), delta="Action Required", delta_color="inverse")
+        m3.metric("Security Risks", int(df['vulnerabilities_count'].sum()))
+        m4.metric("Risk Level", "High" if df['vulnerabilities_count'].sum() > 0 else "Low")
 
         # --- VISUALIZATION SECTION ---
         st.divider()
@@ -96,39 +105,35 @@ if token:
 
         with c1:
             st.subheader("OS Distribution")
-            # Safety Check for Column Name
-            os_col = next((c for c in ['os_name', 'os_family', 'operating_system'] if c in df.columns), None)
             if os_col:
-                fig_os = px.pie(df, names=os_col, hole=0.5, color_discrete_sequence=px.colors.qualitative.Bold)
+                # Clean OS names to ensure they are strings
+                df[os_col] = df[os_col].astype(str).replace('None', 'Unknown')
+                fig_os = px.pie(df, names=os_col, hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
                 st.plotly_chart(fig_os, use_container_width=True)
             else:
-                st.info("OS Data unavailable.")
+                st.info("No OS data found in API response.")
 
         with c2:
-            st.subheader("Missing Updates per Endpoint")
-            if 'name' in df.columns and 'missing_updates' in df.columns:
-                fig_bar = px.bar(df.sort_values('missing_updates', ascending=False).head(10), 
-                                 x='name', y='missing_updates', color='missing_updates',
+            st.subheader("Top 10 Vulnerable Endpoints")
+            # We sort by missing updates for the bar chart
+            top_10 = df.nlargest(10, 'missing_updates')
+            if not top_10.empty and top_10['missing_updates'].sum() > 0:
+                fig_bar = px.bar(top_10, 
+                                 x='name', y='missing_updates', 
+                                 color='missing_updates',
+                                 labels={'missing_updates': 'Unpatched Items'},
                                  color_continuous_scale='Reds')
                 st.plotly_chart(fig_bar, use_container_width=True)
             else:
-                st.info("Patch data unavailable for bar chart.")
+                st.info("All devices are up to date! No bars to show.")
 
         # --- DATA TABLE ---
         st.divider()
         st.subheader("📋 Detailed Endpoint Audit List")
-        
-        # Select only the columns we want to show, if they exist
-        display_cols = [c for c in ['name', 'os_name', 'ip_address', 'last_seen', 'missing_critical_updates'] if c in df.columns]
+        display_cols = [c for c in ['name', os_col, 'ip_address', 'last_seen', 'missing_updates'] if c and c in df.columns]
         st.dataframe(df[display_cols], use_container_width=True)
-        
-        # --- EXPORT SECTION ---
-        st.sidebar.divider()
-        if st.sidebar.button("Generate Audit PDF (Coming Soon)"):
-            st.sidebar.info("PDF Generation feature is being integrated.")
 
     else:
         st.warning(f"No active devices found for {selected_org_name}.")
-
 else:
     st.error("Authentication Failed. Please check your Action1 API Credentials.")
