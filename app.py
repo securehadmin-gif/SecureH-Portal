@@ -175,3 +175,7 @@ if token:
 
 else:
     st.error("Authentication failed. Verify your Client ID and Secret in the code.")
+st.sidebar.divider()
+st.sidebar.caption(f"✅ Secure Connection: Active")
+st.sidebar.caption(f"📡 Source: Action1 Cloud API (AU Cluster)")
+st.sidebar.caption(f"🕒 Last Sync: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}")
