@@ -122,36 +122,81 @@ if token:
 
 
 
-        # --- VISUALS ---
+        # --- VISUALS WITH SAFETY CHECKS ---
 
-        st.divider()
+st.divider()
 
-        c1, c2 = st.columns(2)
+
+
+if not df.empty:
+
+    # Print columns to the console/logs so you can see the REAL names
+
+    # st.write(df.columns.tolist()) 
+
+
+
+    c1, c2 = st.columns(2)
+
+    
+
+    with c1:
+
+        st.subheader("OS Distribution")
+
+        # Action1 3.0 often uses 'os_family' or 'os_version' 
+
+        # Let's check for 'os_name' or fallback to a column that definitely exists
+
+        target_col = None
+
+        for col in ['os_name', 'os_family', 'operating_system']:
+
+            if col in df.columns:
+
+                target_col = col
+
+                break
 
         
 
-        with c1:
+        if target_col:
 
-            st.subheader("OS Distribution")
+            fig_os = px.pie(df, names=target_col, hole=0.4, 
 
-            fig_os = px.pie(df, names='os_name', hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                            color_discrete_sequence=px.colors.qualitative.Pastel)
 
             st.plotly_chart(fig_os)
 
+        else:
+
+            st.info("OS data not found in API response.")
+
             
 
-        with c2:
+    with c2:
 
-            st.subheader("Endpoint Health Status")
+        st.subheader("Endpoint Health Status")
 
-            # Assuming 'connection_status' or similar exists
+        # Search for a status column
 
-            status_col = 'connection_status' if 'connection_status' in df else 'os_family'
+        status_col = next((c for c in ['connection_status', 'status', 'state'] if c in df.columns), None)
+
+        
+
+        if status_col:
 
             fig_stat = px.bar(df, x=status_col, color=status_col)
 
             st.plotly_chart(fig_stat)
 
+        else:
+
+            st.info("Status data not found.")
+
+else:
+
+    st.warning("No data available for the selected organization.")
 
 
         # --- DATA TABLE ---
