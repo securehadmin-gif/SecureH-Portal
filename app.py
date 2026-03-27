@@ -93,113 +93,78 @@ st.caption("Professional Security Audit Portal | Powered by Action1")
 token = get_access_token()
 
 if token:
-    # Sidebar for Organization Selection
     with st.sidebar:
         st.header("Client Management")
-        orgs = fetch_data("organizations", token)
+        org_items = fetch_data("organizations", token)
         
-        if orgs:
-            org_map = {o['name']: o['id'] for o in orgs}
-            selected_org_name = st.selectbox("Select Client / Org", list(org_map.keys()))
+        if org_items:
+            org_map = {o['name']: o['id'] for o in org_items}
+            selected_org_name = st.selectbox("Select Client", list(org_map.keys()))
             selected_org_id = org_map[selected_org_name]
         else:
-            st.error("No organizations found in your Action1 account.")
+            st.error("No organizations found.")
             st.stop()
 
-    # Fetch Detailed Endpoint Data
-    # Path includes the org ID and requests all fields for deep auditing
+    # 1. FETCH DATA (Using the 'Deep Scan' path)
     endpoint_path = f"endpoints/managed/{selected_org_id}"
-    data = fetch_data(endpoint_path, token)
-    df = pd.DataFrame(data)
+    data_items = fetch_data(endpoint_path, token)
+    
+    # 2. CREATE THE DATAFRAME (This fixes the NameError)
+    df = pd.DataFrame(data_items)
 
     if not df.empty:
-        # --- DATA CLEANING & REPAIR ---
-        # Ensure numeric columns are actually numbers to prevent Plotly crashes
-        numeric_map = {
-            'missing_updates': 'Total Patches',
-            'missing_critical_updates': 'Critical Risks',
-            'vulnerabilities_count': 'Vulnerabilities'
-        }
-        for api_key, friendly in numeric_map.items():
-            if api_key in df.columns:
-                df[api_key] = pd.to_numeric(df[api_key], errors='coerce').fillna(0).astype(int)
-            else:
-                df[api_key] = 0
-
-        # Find OS column (Action1 varies between os_name/os_version)
-        os_col = next((c for c in ['os_name', 'os_version', 'os_family'] if c in df.columns), 'os_name')
-        if os_col not in df.columns: df[os_col] = "Unknown OS"
-
-        # Check for Reboot status
-        reboot_col = next((c for c in ['reboot_required', 'pending_reboot'] if c in df.columns), None)
+        # --- THE "REAL DATA" SCANNER ---
+        # We look for ANY column that might contain your "4" missing updates
+        possible_cols = [
+            'missing_critical_updates', 'critical_updates_count', 
+            'vulnerabilities_critical_count', 'missing_updates', 
+            'updates_count', 'missing_security_updates'
+        ]
         
-        # --- EXECUTIVE SUMMARY METRICS ---
+        # We force these to numbers so we can sum them up
+        for col in df.columns:
+            if col in possible_cols:
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+
+        # Identify the best 'Critical' column found
+        crit_col = next((c for c in ['missing_critical_updates', 'critical_updates_count'] if c in df.columns), None)
+        total_col = next((c for c in ['missing_updates', 'updates_count'] if c in df.columns), None)
+
+        # --- EXECUTIVE SUMMARY ---
         st.header(f"Executive Report: {selected_org_name}")
-        m1, m2, m3, m4 = st.columns(4)
+        m1, m2, m3 = st.columns(3)
         
-        total_crit = df['missing_critical_updates'].sum()
+        val_crit = df[crit_col].sum() if crit_col else 0
+        val_total = df[total_col].sum() if total_col else 0
         
-        m1.metric("Total Managed Assets", len(df))
-        m2.metric("Critical Security Risks", total_crit, delta="Action Required" if total_crit > 0 else "Clear", delta_color="inverse")
-        m3.metric("Pending Updates", df['missing_updates'].sum())
-        
-        # Simple Risk Grading
-        risk_score = "Low"
-        if total_crit > 5: risk_score = "CRITICAL"
-        elif total_crit > 0: risk_score = "Medium"
-        m4.metric("Overall Risk Level", risk_score)
+        m1.metric("Total Assets", len(df))
+        m2.metric("Critical Security Risks", int(val_crit), delta="Action Required" if val_crit > 0 else None, delta_color="inverse")
+        m3.metric("Total Missing Patches", int(val_total))
 
-        # --- VISUAL DASHBOARD ---
+        # --- DEBUG VIEW (Temporary) ---
+        # If your report still says 0, look at this table to see the REAL column names
+        with st.expander("🔍 Technician Data Check (See Raw API Fields)"):
+            st.write("Current Columns found in Action1:", df.columns.tolist())
+            st.dataframe(df.head(5))
+
+        # --- AUDIT TABLE ---
         st.divider()
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.subheader("OS Distribution")
-            df[os_col] = df[os_col].astype(str)
-            fig_os = px.pie(df, names=os_col, hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-            st.plotly_chart(fig_os, use_container_width=True)
-
-        with c2:
-            st.subheader("Patching Status by Device")
-            if df['missing_updates'].sum() > 0:
-                fig_bar = px.bar(df.nlargest(10, 'missing_updates'), 
-                                 x='name', y='missing_updates', 
-                                 color='missing_critical_updates',
-                                 labels={'missing_updates': 'Updates', 'name': 'Device'},
-                                 color_continuous_scale='Reds')
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.info("Perfect Compliance! No missing updates found.")
-
-        # --- DETAILED AUDIT TABLE ---
-        st.divider()
-        st.subheader("📋 Full Endpoint Security Audit")
+        st.subheader("📋 Security Audit Detail")
         
-        # Create a combined 'Health' status for the report
-        def get_health(row):
-            if reboot_col and (row[reboot_col] is True or str(row[reboot_col]).lower() == 'true'):
-                return "🔄 Reboot Needed"
-            if row['missing_critical_updates'] > 0:
-                return "⚠️ Vulnerable"
-            return "✅ Secure"
-
-        df['Health Status'] = df.apply(get_health, axis=1)
-
-        # Build final display table
-        final_cols = ['name', os_col, 'Health Status', 'missing_critical_updates', 'missing_updates', 'last_seen']
-        audit_table = df[final_cols].copy()
-        audit_table.columns = ['Device Name', 'OS Version', 'Security Status', 'Critical Risks', 'Total Patches', 'Last Seen']
+        # Dynamic OS Column
+        os_c = next((c for c in ['os_name', 'os_version'] if c in df.columns), 'name')
         
-        st.dataframe(audit_table, use_container_width=True)
-
-        # --- RECOMMENDATIONS ---
-        st.info(f"**Technician Note:** To remediate these issues, log into Action1 and deploy all 'Critical' and 'Security' updates to the {selected_org_name} group.")
+        # Build the viewable report
+        report_df = df[['name', os_c]].copy()
+        report_df['Critical Risks'] = df[crit_col] if crit_col else 0
+        report_df['Total Patches'] = df[total_col] if total_col else 0
+        
+        st.dataframe(report_df, use_container_width=True)
 
     else:
-        st.warning(f"No devices found for {selected_org_name}. Please verify the agent is active.")
-
+        st.warning(f"No devices found for {selected_org_name}.")
 else:
-    st.error("Authentication failed. Verify your Client ID and Secret in the code.")
+    st.error("Auth failed. Please check Client ID/Secret.")
 st.sidebar.divider()
 st.sidebar.caption(f"✅ Secure Connection: Active")
 st.sidebar.caption(f"📡 Source: Action1 Cloud API (AU Cluster)")
